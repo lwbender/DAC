@@ -25,7 +25,7 @@ PCs = ['PC{}'.format(k) for k in [3,4,5,6]] #Not used
 #Gets values from inserted terminal commands
 #Takes in a valid command
 #Returns either the value that is stated after the command (-cmd a where -cmd is command and a is value)
-#Returns null if command doesn't exist, errors if no value for command. The 
+#Returns null if command doesn't exist, errors if no value for command.
 def get_cmd(cmd):
 	cmds = ['aET', 'aST', 'uET', 'uST', 'dosIDs'] #Valid commands
 	if cmd not in cmds:
@@ -66,8 +66,8 @@ def temp_correct(df_dos):
 	return pars, slopes
 
 #Handles partial dosimeters IDs passed through the terminal
-#Partial is the partial of a dos ID (can be end bits)
-#Results in a full dosimeter ID. 
+#Partial is the partial string of a dos ID (can be end bits such as 2980T, 2981R, etc)
+#Results in a full dosimeter ID or quits if it's invalid.
 def handle_dosID(partial):
 	id_length = 11
 	if 'VA' not in partial:
@@ -146,17 +146,19 @@ for i,df_dos in enumerate(df_doses):
 		print(e)
 		print("No data for {0} within the given daterange.".format(dos_IDs[i]))
 		exit()
-		
+	#Raw graph
 	df_dos[['mID', 'PC3', 'PC4', 'PC5', 'PC6']].plot(x='mID', title='Raw Measurement Values').set_ylabel('Measurements (fF)')
 	legend_str = ['PC{0} Std: {1}'.format(i, round(np.std(df_dos['PC{0}'.format(i)].tolist()),1)) for i in range(3,7)]
 	plt.legend(legend_str)
 	plt.tight_layout()
 	plt.savefig(dos_IDs[i] + '-raw.png')
+	#Temperature corrected graph
 	df_dos[['mID', 'TC PC3', 'TC PC4', 'TC PC5', 'TC PC6']].plot(x='mID', title='Corrected Measurement Values').set_ylabel('Measurements (fF)')
 	legend_str = ['PC{0} Std: {1}'.format(i, round(np.std(df_dos['TC PC{0}'.format(i)].tolist()),1)) for i in range(3,7)]
 	plt.legend(legend_str)
 	plt.tight_layout()
 	plt.savefig(dos_IDs[i] + '-tc.png')
+	#Relationship between Temperature and Measurements graph
 	ax = df_dos[['PC1', 'PC3', 'PC4', 'PC5', 'PC6']].plot(x='PC1', title='Measurement Values vs. Temperature')
 	ax.set_xlabel('Temperature (fF)')
 	ax.set_ylabel('Measurements (fF)')
@@ -171,12 +173,12 @@ print('DDP_' + DDP.version + ': DDP_configDB_' + DDP.version + ' loaded', end = 
 print(dash[1:] + 'DDP_' + DDP.version + ': Workbook export initialized', end = dash)
 
 
-#Saving eerything to one notebook
+#Saving everything to one notebook
 fn = 'export/' + DDP.version + '_' + datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + '.xlsx'  
 d = os.path.dirname(fn)
 if not os.path.exists(d): os.makedirs(d)
 print('DDP_' + DDP.version + ': Saving output- \n' + fn, end = dash)
-writer = pd.ExcelWriter(fn, engine='xlsxwriter')
+writer = pd.ExcelWriter(fn, engine='xlsxwriter') #Forces xlsxwriter so that images can be injected
 for i,df_dos in enumerate(df_doses):
 	df_dos.to_excel(writer, sheet_name=dos_IDs[i])
 	writer.sheets[dos_IDs[i]].insert_image('P1', dos_IDs[i] + '-raw.png')
