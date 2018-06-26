@@ -19,7 +19,8 @@ import DDP
 import inspect
 #~
 dash = '\n' + '-'*59 + '\n'
-PCs = ['PC{}'.format(k) for k in [3,4,5,6]] #Not used
+PCs = ['PC{}'.format(k) for k in [3,4,5,6]] 
+TPCs = ['TC PC3', 'TC PC4', 'TC PC5', 'TC PC6']
 #~
 
 #Gets values from inserted terminal commands
@@ -27,7 +28,7 @@ PCs = ['PC{}'.format(k) for k in [3,4,5,6]] #Not used
 #Returns either the value that is stated after the command (-cmd a where -cmd is command and a is value)
 #Returns null if command doesn't exist, errors if no value for command.
 def get_cmd(cmd):
-	cmds = ['aET', 'aST', 'uET', 'uST', 'dosIDs'] #Valid commands
+	cmds = ['aET', 'aST', 'uET', 'uST', 'dosIDs', 'fit'] #Valid commands
 	if cmd not in cmds:
 		print('Command not valid.')
 		return
@@ -38,7 +39,7 @@ def get_cmd(cmd):
 			return None
 #Replacing datetime.datetime.strptime since it doesn't handle None types 
 #Paramters exact same as datetime.datetime.strptime
-#Results same as datetime.datetime.strptime but also None if None is given to it.
+#Results same as datetime.datetime.strptime but also None if None is given to it
 def strptime(string, refstring='%m/%d/%y %H:%M:%S'):
 	if string != None:
 		try:
@@ -48,26 +49,40 @@ def strptime(string, refstring='%m/%d/%y %H:%M:%S'):
 	else:
 		return None
 		
+		
+		
+try:
+	linefit = int(get_cmd('fit'))
+except ValueError:
+	linefit = 1
+		
 #Corrects given capacitance values based on temperature
 #Inputs a dataframe containing raw data
-#Results fitted lines and slopes of the relation.
+#Results fitted lines and slopes of the relation
 def temp_correct(df_dos):
-	#C - C0 = a(Tr-T0) 
-	#where Cr = a * Tr + b. 
+	global linefite
+	#C - C0 = a(Trn^n-T0n^n) + b(...)
+	#where Cr = a * Trn^n + b * ...
 	#C tries to correct to Cr. 
-	#Right now using first T as Tr and therefore correcting to first capacitance value. Fahad uses Tr = 0 which may be a 'safer'.
+	#Right now using first T as Tr and therefore correcting to first capacitance value. Fahad uses Tr = 0 which may be a 'safer'
 	#Regardless each method results same STDEV.P
 	#However which one results a more correct capacitance? Is 'b' the max capacitance of the capacitor when Tr = 0?
-	pars = [np.polyfit(df_dos['PC1'], df_dos['PC{0}'.format(i)], 1, full=True) for i in range(3,7)]
-	slopes = [par[0][0] for par in pars]
-	ref_temp = df_dos['PC1'].iloc[0] #or 0?
-	for i, slope in enumerate(slopes):
-		df_dos['TC PC{0}'.format(i+3)] = slope * (ref_temp - df_dos['PC1']) + df_dos['PC{0}'.format(i + 3)]
-	return pars, slopes
+
+	pars = [np.polyfit(df_dos['PC1'], df_dos['PC{0}'.format(i)], linefit) for i in range(3,7)]
+	for i, par in enumerate(pars):
+		ref_cap = df_dos['PC' + str(i + 3)].iloc[0]
+		polyf = np.poly1d(par)
+		df_dos['TC PC{0}'.format(i + 3)] =  df_dos['PC' + str(i + 3)] - polyf(df_dos['PC1']) - i * 20 + 80
+		df_dos['PCN' + str(i + 3)] = df_dos['PC' + str(i + 3)] - ref_cap - i * 200 + 800
+		slopes = []
+		
+		
+	
+	return pars
 
 #Handles partial dosimeters IDs passed through the terminal
 #Partial is the partial string of a dos ID (can be end bits such as 2980T, 2981R, etc)
-#Results in a full dosimeter ID or quits if it's invalid.
+#Results in a full dosimeter ID or quits if it's invalid
 def handle_dosID(partial):
 	id_length = 11
 	if 'VA' not in partial:
@@ -89,7 +104,7 @@ def handle_dosID(partial):
 	
 #Initializing some formating stuff, printing init info
 from matplotlib import dates
-date_format = dates.DateFormatter('%m/%d/%y %H:%M:%S') 
+date_format = dates.DateFormatter('%m/%d/%y %H:%M:%S')
 dc = u'\N{DEGREE SIGN}'
 verbose = False
 print(dash[1:] + 'DDP_' + DDP.version + ': Module Versions', end = dash)
@@ -120,53 +135,107 @@ verbose = True
 print(dash[1:] + 'DDP_' + DDP.version + ': Starting SQL connections', end = dash)
 SQL_cons = DDP.start_SQL_connection()
 SQL_prams = { 
-                'dosimeter_ids' : dos_IDs, 
+                'dosimeter_ids' : dos_IDs,
                 'SQL_cons' : SQL_cons,
                 'verbose' : True
             } 
-full_data, configDB, SQL_cons = DDP.import_data(**SQL_prams)			
+full_data, configDB, SQL_cons = DDP.import_data(**SQL_prams)
 
 #print(list(full_data))
 
-#Refining the raw data to give actual capacitance as well as measurements within the date range. 
+#Refining the raw data to give actual capacitance as well as measurements within the date range
 df_doses = [full_data.loc[(full_data.dos_ID == dos_ID) & (full_data.index >= fST) & (full_data.index <= fET)] for dos_ID in dos_IDs]
 for df_dos in df_doses:
 	for i in range(1, 8):
 		if i != 2:
-			if i != 7: df_dos['PC{0}'.format(i)] = round(df_dos['PC{0}'.format(i)]/2097152*220000,1) #Rounding to match how SQL would round. 
+			if i != 7: df_dos['PC{0}'.format(i)] = round(df_dos['PC{0}'.format(i)]/2097152*220000,1) #Rounding to match how SQL would round
 			else: df_dos['PC{0}'.format(i)] = round(df_dos['PC{0}'.format(i)]/2097152*220000,2)
 
+			
+#Some nasty code for writing out the standard deviation and fitted lines
+stdevdf = pd.DataFrame(columns=['Dosimeter ID'] + PCs + TPCs)
+eqdf = pd.DataFrame(columns=['Dosimeter ID', 'PC'] + [x for x in range(linefit, -1, -1)])
+eqaverages = [[0 for _ in range(linefit + 1)] for _ in PCs]
+divide_by = [0 for _ in PCs]
 
-
-#Adding corrected capacitance and graphs showing the raw and corrected data as well as the relation between measurements and temperature. 
+#Adding corrected capacitance and graphs showing the raw and corrected data as well as the relation between measurements and temperature
 for i,df_dos in enumerate(df_doses):
 	try:
-		_, slopes = temp_correct(df_dos)
+		pars = temp_correct(df_dos)
 	except Exception as e:
 		print(e)
 		print("No data for {0} within the given daterange.".format(dos_IDs[i]))
 		exit()
-	#Raw graph
-	df_dos[['mID', 'PC3', 'PC4', 'PC5', 'PC6']].plot(x='mID', title='Raw Measurement Values').set_ylabel('Measurements (fF)')
-	legend_str = ['PC{0} Std: {1}'.format(i, round(np.std(df_dos['PC{0}'.format(i)].tolist()),1)) for i in range(3,7)]
+		
+	const_pcs = ['PC3', 'PC4', 'PC5', 'PC6']	
+	pcs = ['PC3', 'PC4', 'PC5', 'PC6']
+	tpcs = ['TC PC3', 'TC PC4', 'TC PC5', 'TC PC6']
+	npcs = ['PCN3', 'PCN4', 'PCN5', 'PCN6']
+	
+	#For broken pc slots (RIP PC4 Jun 2018)
+	if dos_IDs[i] == 'VA00002980T':
+		pcs = ['PC3', 'PC5', 'PC6']
+		tpcs = ['TC PC3', 'TC PC5', 'TC PC6']
+		npcs = ['PCN3', 'PCN5', 'PCN6']
+	
+	
+	for k,j in enumerate([PCs.index(pc) for pc in pcs]):
+		eqaverages[j] += pars[j]
+		divide_by[j] += 1
+	
+	
+	
+	#Raw graph	
+	df_dos[['mID'] + pcs].plot(x='mID', title='Raw Measurement Values').set_ylabel('Measurements (fF)')
+	pcstdev = [np.std(df_dos[pc].tolist()) for pc in pcs]
+	legend_str = ['{0} Std: {1}'.format(pc, round(pcstdev[j],1)) for j, pc in enumerate(pcs)]
 	plt.legend(legend_str)
 	plt.tight_layout()
 	plt.savefig(dos_IDs[i] + '-raw.png')
+	
+	#Normalized Graph
+	df_dos[['mID'] + npcs].plot(x='mID', title='Normalized Measurement Values').set_ylabel('Measurements (fF)')
+	plt.legend(pcs)
+	plt.tight_layout()
+	plt.savefig(dos_IDs[i] + '-norm.png')
+	
 	#Temperature corrected graph
-	df_dos[['mID', 'TC PC3', 'TC PC4', 'TC PC5', 'TC PC6']].plot(x='mID', title='Corrected Measurement Values').set_ylabel('Measurements (fF)')
-	legend_str = ['PC{0} Std: {1}'.format(i, round(np.std(df_dos['TC PC{0}'.format(i)].tolist()),1)) for i in range(3,7)]
+	df_dos[['mID'] + tpcs].plot(x='mID', title='Corrected Measurement Values').set_ylabel('Measurements (fF)')
+	tcstdev = [np.std(df_dos[tpc].tolist()) for tpc in tpcs]
+	legend_str = ['{0} Std: {1}'.format(tpc, round(tcstdev[j],1)) for j,tpc in enumerate(tpcs)]
 	plt.legend(legend_str)
 	plt.tight_layout()
 	plt.savefig(dos_IDs[i] + '-tc.png')
+	
 	#Relationship between Temperature and Measurements graph
-	ax = df_dos[['PC1', 'PC3', 'PC4', 'PC5', 'PC6']].plot(x='PC1', title='Measurement Values vs. Temperature')
-	ax.set_xlabel('Temperature (fF)')
+	ax = df_dos[['PC1'] + pcs].plot(x='PC1', title='Measurement Values vs. Temperature')
+	ax.set_xlabel('Temperature (fF) [PC1]')
 	ax.set_ylabel('Measurements (fF)')
-	legend_str = ['PC{0} Slope: {1}'.format(i, round(slopes[i-3],4)) for i in range(3,7)]
-	plt.legend(legend_str)
+	plt.legend(pcs)
 	plt.tight_layout()
 	plt.savefig(dos_IDs[i] + '-temprel.png')
 	
+	stdevdf_dosID = pd.DataFrame([[dos_IDs[i]] + pcstdev + tcstdev], columns=['Dosimeter ID'] + pcs + tpcs)
+	stdevdf = stdevdf.append(stdevdf_dosID, ignore_index=True)
+	eqdata = [[dos_IDs[i], PCs[j]]+ pars[j].tolist() for j in [PCs.index(pc) for pc in pcs]]
+	eqdf_dosID = pd.DataFrame(eqdata, columns=['Dosimeter ID', 'PC'] + [x for x in range(linefit, -1, -1)])
+	eqdf = eqdf.append(eqdf_dosID)
+
+
+#Nasty code for average of standard deviation	
+sdevavgdata = [['Average'] + [stdevdf['PC' + str(i)].mean() for i in [3,4,5,6]] + [stdevdf['TC PC' + str(i)].mean() for i in [3,4,5,6]]]
+stdevdf_avg = pd.DataFrame(sdevavgdata, columns=['Dosimeter ID'] + PCs + TPCs)
+stdevdf = stdevdf.append(stdevdf_avg)
+
+#Nasty code for temp correction functions
+for i in range(len(dos_IDs)):
+	for j in range(len(eqaverages[i])):
+		eqaverages[i][j] /= divide_by[i]
+		
+eqavrgdata = [['Average',  PCs[i]] + eqaverages[i].tolist() for i in range(len(PCs))]
+eqavrgdf = pd.DataFrame(eqavrgdata, columns=['Dosimeter ID', 'PC'] + [x for x in range(linefit, -1, -1)])
+eqdf = eqdf.append(eqavrgdf)
+
 #print(np.std(df_doses[0]['PC3'].tolist()))
 
 print('DDP_' + DDP.version + ': DDP_configDB_' + DDP.version + ' loaded', end = dash)
@@ -182,8 +251,12 @@ writer = pd.ExcelWriter(fn, engine='xlsxwriter') #Forces xlsxwriter so that imag
 for i,df_dos in enumerate(df_doses):
 	df_dos.to_excel(writer, sheet_name=dos_IDs[i])
 	writer.sheets[dos_IDs[i]].insert_image('P1', dos_IDs[i] + '-raw.png')
-	writer.sheets[dos_IDs[i]].insert_image('P24', dos_IDs[i] + '-tc.png')
-	writer.sheets[dos_IDs[i]].insert_image('P47', dos_IDs[i] + '-temprel.png')
+	writer.sheets[dos_IDs[i]].insert_image('P24', dos_IDs[i] + '-norm.png')
+	writer.sheets[dos_IDs[i]].insert_image('P47', dos_IDs[i] + '-tc.png')
+	writer.sheets[dos_IDs[i]].insert_image('P70', dos_IDs[i] + '-temprel.png')
+	
+stdevdf.to_excel(writer, sheet_name='Standard Deviations')
+eqdf.to_excel(writer, sheet_name='Temperature Correction Values')
 writer.save()
 print('DDP_' + DDP.version + ': Output saved successfully', end = dash)
 print('DDP_' + DDP.version + ': Workbook export completed', end = dash)
